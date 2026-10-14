@@ -1,0 +1,45 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import type { Shell } from "../types";
+import { api, errMsg } from "../client";
+
+type Side = { id: number; who: string; type: string; line: string; votes: number };
+type D = { day: string; topic: string; a: Side; b: Side; mine: "a" | "b" | null; settled: boolean; winner: "a" | "b" | null };
+
+export default function ArenaPanel({ shell }: { shell: Shell }) {
+  const [d, setD] = useState<D | null | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api<{ debate: D | null }>("/api/debate").then((r) => setD(r.debate)).catch(() => setD(null)); }, []);
+  if (d === undefined) return <p className="sub">Setting up tonight's stage…</p>;
+  if (!d) return <p className="sub">No debate tonight. The stage crew is on strike.</p>;
+  const tot = d.a.votes + d.b.votes;
+  const pct = (s: Side) => (tot ? Math.round((s.votes / tot) * 100) : 0);
+  const vote = async (s: "a" | "b") => {
+    if (busy) return; setBusy(true);
+    try { const r = await api<{ debate: D }>("/api/debate", { side: d.mine === s ? null : s }); setD(r.debate); if (r.debate.mine) shell.toast("Vote counted."); }
+    catch (e) { shell.toast(errMsg(e)); }
+    setBusy(false);
+  };
+  return (
+    <>
+      <div className="card"><div className="k">Tonight's debate · voting closes at midnight UTC</div><p className="topic">{d.topic}</p></div>
+      {(["a", "b"] as const).map((k) => {
+        const s = d[k];
+        const mine = shell.me?.tokenId === s.id;
+        return (
+          <div className="card" key={k}>
+            <div className="row"><div><b>{s.who}</b>{mine && <span className="k"> · yours</span>}<div className="k">{s.type}</div></div><span className="k num">{s.votes} vote{s.votes === 1 ? "" : "s"}</span></div>
+            <p className="quote">“{s.line}”</p>
+            <button className="vote" aria-pressed={d.mine === k} onClick={() => vote(k)} disabled={d.settled}>
+              <em style={{ width: `${d.mine ? pct(s) : 0}%` }} />
+              <span>{d.mine === k ? "Your vote" : `Vote for ${s.who.split(" #")[0]}`}</span>
+              <span className="num">{d.mine ? `${pct(s)}%` : ""}</span>
+            </button>
+          </div>
+        );
+      })}
+      <p className="note">Winners climb the Palace of Legends and get a confidence boost. Losers get roasted in tomorrow's Gazette.</p>
+    </>
+  );
+}

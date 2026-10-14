@@ -1,0 +1,46 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { MODEL, hasClaude } from "./config";
+
+let client: Anthropic | null = null;
+const ai = () => (client ??= new Anthropic());
+
+type Effort = "low" | "medium" | "high";
+
+/**
+ * One Claude call that must come back as JSON matching `schema` (structured outputs).
+ * Returns null when no API key is set, the model declines, or the call fails,
+ * so every caller has an offline fallback and the town never breaks.
+ */
+export async function askJSON<T>(opts: {
+  system: string;
+  messages: Anthropic.MessageParam[];
+  schema: Record<string, unknown>;
+  effort?: Effort;
+  maxTokens?: number;
+}): Promise<T | null> {
+  if (!hasClaude()) return null;
+  try {
+    const res = await ai().messages.create({
+      model: MODEL,
+      max_tokens: opts.maxTokens ?? 4000,
+      system: opts.system,
+      messages: opts.messages,
+      output_config: { effort: opts.effort ?? "low", format: { type: "json_schema", schema: opts.schema } },
+    });
+    if (res.stop_reason === "refusal" || res.stop_reason === "max_tokens") return null;
+    const text = res.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+    return text ? (JSON.parse(text) as T) : null;
+  } catch (e) {
+    if (e instanceof Anthropic.APIError) console.error(`Claude API error ${e.status}:`, e.message);
+    else console.error("Claude call failed:", e);
+    return null;
+  }
+}
+
+/** JSON schema helpers. Structured outputs need every object closed and every property required. */
+export const obj = (properties: Record<string, unknown>) => ({ type: "object", properties, required: Object.keys(properties), additionalProperties: false });
+export const str = (description?: string) => ({ type: "string", ...(description ? { description } : {}) });
+export const int = (description?: string) => ({ type: "integer", ...(description ? { description } : {}) });
+export const bool = (description?: string) => ({ type: "boolean", ...(description ? { description } : {}) });
+export const oneOf = (values: string[], description?: string) => ({ type: "string", enum: values, ...(description ? { description } : {}) });
+export const arr = (items: unknown, description?: string) => ({ type: "array", items, ...(description ? { description } : {}) });
